@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Monitor</title>
+    <link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+    <main class="page">
+        <header class="header">
+            <div>
+                <p class="label">MongoDB realtime updates</p>
+                <h1>Order Monitor</h1>
+            </div>
+            <div class="status">
+                <span id="connectionDot" class="dot"></span>
+                <span id="connectionText">Connecting</span>
+            </div>
+        </header>
+
+        <section class="summary" aria-label="Order summary">
+            <div>
+                <span>Total</span>
+                <strong id="totalOrders">0</strong>
+            </div>
+            <div>
+                <span>Active</span>
+                <strong id="activeOrders">0</strong>
+            </div>
+            <div>
+                <span>Last event</span>
+                <strong id="latestEvent">None</strong>
+            </div>
+        </section>
+
+        <section class="toolbar">
+            <input id="searchInput" type="search" placeholder="Search orders">
+            <button id="clearFeed" type="button">Clear Feed</button>
+        </section>
+
+        <section class="layout">
+            <section class="panel">
+                <div class="panel-title">
+                    <h2>Orders</h2>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Customer</th>
+                                <th>Product</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ordersBody"></tbody>
+                    </table>
+                    <p id="ordersEmpty" class="empty">No orders found.</p>
+                </div>
+            </section>
+
+            <aside class="panel feed-panel">
+                <div class="panel-title">
+                    <h2>Event Feed</h2>
+                </div>
+                <div id="eventFeed" class="feed">
+                    <p class="empty">Waiting for changes.</p>
+                </div>
+            </aside>
+        </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js?v=4"></script>
+</body>
+</html>
