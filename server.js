@@ -6,7 +6,12 @@ const path = require('path');
 const { ObjectId } = require('mongodb');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { connectToDatabase, getOrdersCollection } = require('./db');
+const {
+    connectToDatabase,
+    getOrdersCollection,
+    saveResumeToken,
+    getResumeToken
+} = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,12 +22,59 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 5000;
-let changeStreamStarted = false;
 
+// ---------------------------------------------------------------------------
+// Middleware
+// ---------------------------------------------------------------------------
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ---------------------------------------------------------------------------
+// Bearer-token auth middleware (Section 5)
+// ---------------------------------------------------------------------------
+// API_TOKEN must be set in .env. All REST routes below are protected.
+// The browser client sends: Authorization: Bearer <token>
+function requireBearerToken(req, res, next) {
+    const apiToken = process.env.API_TOKEN;
+
+    if (!apiToken) {
+        // No token configured — skip auth so the server still works without a key set.
+        return next();
+    }
+
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    if (!token || token !== apiToken) {
+        return res.status(401).json({ error: 'Unauthorized: invalid or missing bearer token' });
+    }
+
+    next();
+}
+
+// ---------------------------------------------------------------------------
+// Socket.IO middleware — same token check (Section 5)
+// ---------------------------------------------------------------------------
+io.use((socket, next) => {
+    const apiToken = process.env.API_TOKEN;
+
+    if (!apiToken) {
+        return next(); // auth disabled — no token configured
+    }
+
+    const token = socket.handshake.auth?.token;
+
+    if (!token || token !== apiToken) {
+        return next(new Error('Unauthorized: invalid or missing socket token'));
+    }
+
+    next();
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 function toClientOrder(order) {
     if (!order) {
         return null;
@@ -42,10 +94,33 @@ function parseObjectId(id) {
     return new ObjectId(id);
 }
 
-app.get('/orders', async (req, res) => {
+// ---------------------------------------------------------------------------
+// REST routes (Section 2 + Section 4 + Section 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /orders
+ * Supports cursor-based pagination:
+ *   ?limit=50          – page size (default 50, max 200)
+ *   ?cursor=<_id>      – last seen _id from previous page (returns docs older than this id)
+ *
+ * The change stream is the sole emitter of order_update events; these routes
+ * only read/write MongoDB (Section 2).
+ */
+app.get('/orders', requireBearerToken, async (req, res) => {
     try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+        const cursor = req.query.cursor;
+
+        const query = {};
+
+        if (cursor && ObjectId.isValid(cursor)) {
+            // Return orders with _id less than the cursor (older, for descending sort)
+            query._id = { $lt: new ObjectId(cursor) };
+        }
+
         const orders = await getOrdersCollection()
-            .find({}, {
+            .find(query, {
                 projection: {
                     customer_name: 1,
                     product_name: 1,
@@ -55,9 +130,17 @@ app.get('/orders', async (req, res) => {
                 }
             })
             .sort({ created_at: -1, _id: -1 })
+            .limit(limit)
             .toArray();
 
-        res.json(orders.map(toClientOrder));
+        const nextCursor = orders.length === limit
+            ? orders[orders.length - 1]._id.toString()
+            : null;
+
+        res.json({
+            data: orders.map(toClientOrder),
+            nextCursor
+        });
     } catch (err) {
         console.error('Failed to fetch orders:', err.message);
         res.status(500).json({
@@ -66,7 +149,7 @@ app.get('/orders', async (req, res) => {
     }
 });
 
-app.post('/orders', async (req, res) => {
+app.post('/orders', requireBearerToken, async (req, res) => {
     try {
         const order = {
             customer_name: String(req.body.customer_name || '').trim(),
@@ -85,12 +168,8 @@ app.post('/orders', async (req, res) => {
         const result = await getOrdersCollection().insertOne(order);
         const createdOrder = toClientOrder({ ...order, _id: result.insertedId });
 
-        if (!changeStreamStarted) {
-            io.emit('order_update', {
-                operation: 'INSERT',
-                data: createdOrder
-            });
-        }
+        // The change stream is the sole emitter of order_update events (Section 2).
+        // No io.emit() here.
 
         return res.status(201).json(createdOrder);
     } catch (err) {
@@ -101,7 +180,7 @@ app.post('/orders', async (req, res) => {
     }
 });
 
-app.patch('/orders/:id', async (req, res) => {
+app.patch('/orders/:id', requireBearerToken, async (req, res) => {
     try {
         const _id = parseObjectId(req.params.id);
 
@@ -135,12 +214,8 @@ app.patch('/orders/:id', async (req, res) => {
         const resultOrder = await getOrdersCollection().findOne({ _id });
         const updatedOrder = toClientOrder(resultOrder);
 
-        if (!changeStreamStarted) {
-            io.emit('order_update', {
-                operation: 'UPDATE',
-                data: updatedOrder
-            });
-        }
+        // The change stream is the sole emitter of order_update events (Section 2).
+        // No io.emit() here.
 
         return res.json(updatedOrder);
     } catch (err) {
@@ -151,7 +226,7 @@ app.patch('/orders/:id', async (req, res) => {
     }
 });
 
-app.delete('/orders/:id', async (req, res) => {
+app.delete('/orders/:id', requireBearerToken, async (req, res) => {
     try {
         const _id = parseObjectId(req.params.id);
 
@@ -172,12 +247,8 @@ app.delete('/orders/:id', async (req, res) => {
         await getOrdersCollection().deleteOne({ _id });
         const deletedOrder = toClientOrder(result);
 
-        if (!changeStreamStarted) {
-            io.emit('order_update', {
-                operation: 'DELETE',
-                data: deletedOrder
-            });
-        }
+        // The change stream is the sole emitter of order_update events (Section 2).
+        // No io.emit() here.
 
         return res.json(deletedOrder);
     } catch (err) {
@@ -196,52 +267,89 @@ app.get('/health', (req, res) => {
     });
 });
 
+// ---------------------------------------------------------------------------
+// Socket.IO connection + room handling (Section 4)
+// ---------------------------------------------------------------------------
+// Clients may join a named room by passing `room` in the auth handshake, e.g.:
+//   io({ auth: { token: '...', room: 'customer:42' } })
+// If no room is given, the socket is placed in the global "all_orders" room.
+// ---------------------------------------------------------------------------
+const GLOBAL_ROOM = 'all_orders';
+
 io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+    const room = socket.handshake.auth?.room || GLOBAL_ROOM;
+    socket.join(room);
+    console.log(`Client connected: ${socket.id} → room "${room}"`);
 
     socket.on('disconnect', () => {
-        console.log('Client disconnected');
+        console.log(`Client disconnected: ${socket.id}`);
     });
 });
 
+// ---------------------------------------------------------------------------
+// Change stream (Section 1)
+// ---------------------------------------------------------------------------
 function startChangeStream() {
     let changeStream;
+    const resumeToken = getResumeToken();
+
+    const watchOptions = { fullDocument: 'updateLookup' };
+
+    if (resumeToken) {
+        watchOptions.resumeAfter = resumeToken;
+        console.log('Resuming change stream from saved token.');
+    }
 
     try {
-        changeStream = getOrdersCollection().watch([], {
-            fullDocument: 'updateLookup'
-        });
+        changeStream = getOrdersCollection().watch([], watchOptions);
     } catch (err) {
-        console.warn('MongoDB change streams are unavailable:', err.message);
+        console.error('MongoDB change streams unavailable:', err.message);
+        console.log('Retrying change stream in 2 000 ms…');
+        setTimeout(startChangeStream, 2000);
         return;
     }
 
-    changeStreamStarted = true;
-
     changeStream.on('change', (change) => {
+        // Persist token before emitting so a crash after a write is still safe.
+        saveResumeToken(change._id);
+
         const operation = change.operationType.toUpperCase();
         const data = toClientOrder(change.fullDocument) || {
             _id: change.documentKey?._id?.toString()
         };
 
-        io.emit('order_update', {
-            operation,
-            data
-        });
+        const payload = { operation, data };
+
+        // Emit to the matching room (customer/dashboard scope) AND always
+        // broadcast to the global room so the default dashboard stays current.
+        const roomFromDoc = data?.room; // optional field on the document itself
+
+        if (roomFromDoc) {
+            io.to(roomFromDoc).emit('order_update', payload);
+        }
+
+        io.to(GLOBAL_ROOM).emit('order_update', payload);
     });
 
     changeStream.on('error', (err) => {
-        changeStreamStarted = false;
-        console.warn('MongoDB change stream stopped:', err.message);
+        console.error('Change stream error:', err.message);
+
+        changeStream.close().catch(() => {});
+
+        console.log('Retrying change stream in 2 000 ms…');
+        setTimeout(startChangeStream, 2000);
     });
 
     changeStream.on('close', () => {
-        changeStreamStarted = false;
+        console.log('Change stream closed.');
     });
 
-    console.log('Listening for MongoDB order changes...');
+    console.log('Listening for MongoDB order changes…');
 }
 
+// ---------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------
 async function start() {
     await connectToDatabase();
     startChangeStream();
