@@ -25,8 +25,27 @@ function getOrdersCollection() {
     return database.collection(collectionName);
 }
 
+// ---------------------------------------------------------------------------
+// Resume token helpers
+// ---------------------------------------------------------------------------
+// In production, persist this token in Redis (e.g. SET resume_token <value>)
+// or in a dedicated "sync_state" MongoDB collection so it survives a server
+// restart. An in-memory variable is used here for simplicity.
+// ---------------------------------------------------------------------------
+let _resumeToken = null;
+
+function saveResumeToken(token) {
+    _resumeToken = token;
+}
+
+function getResumeToken() {
+    return _resumeToken;
+}
+
 module.exports = {
     client,
     connectToDatabase,
-    getOrdersCollection
+    getOrdersCollection,
+    saveResumeToken,
+    getResumeToken
 };
