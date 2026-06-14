@@ -1,4 +1,18 @@
-const socket = io();
+// ---------------------------------------------------------------------------
+// Socket.IO client setup
+// API_TOKEN is injected server-side into the page or falls back to empty
+// (when auth is disabled the server accepts empty tokens too).
+// ---------------------------------------------------------------------------
+const API_TOKEN = window.__API_TOKEN__ || '';
+
+const socket = io({
+    auth: {
+        token: API_TOKEN,
+        // To join a customer-scoped room, set window.__SOCKET_ROOM__ before this
+        // script loads, e.g.:  <script>window.__SOCKET_ROOM__ = 'customer:42';</script>
+        room: window.__SOCKET_ROOM__ || undefined
+    }
+});
 
 const state = {
     orders: [],
@@ -132,9 +146,14 @@ function eventTitle(operation) {
     return 'Order updated';
 }
 
+// ---------------------------------------------------------------------------
+// Connection status indicator (Section 3)
+// 'Live' | 'Reconnecting…' | 'Offline'
+// ---------------------------------------------------------------------------
 function setConnection(status) {
     connectionText.textContent = status;
     connectionDot.classList.toggle('online', status === 'Live');
+    connectionDot.classList.toggle('reconnecting', status === 'Reconnecting…');
     connectionDot.classList.toggle('offline', status === 'Offline');
 }
 
@@ -258,15 +277,28 @@ function applyRealtimeUpdate(payload) {
     renderEvents();
 }
 
+// ---------------------------------------------------------------------------
+// Data loading (Section 3 + Section 4)
+// Handles the new paginated response shape: { data: [...], nextCursor }
+// ---------------------------------------------------------------------------
 async function loadOrders() {
     try {
-        const response = await fetch('/orders');
+        const headers = {};
+
+        if (API_TOKEN) {
+            headers['Authorization'] = `Bearer ${API_TOKEN}`;
+        }
+
+        const response = await fetch('/orders', { headers });
 
         if (!response.ok) {
             throw new Error(`Request failed with ${response.status}`);
         }
 
-        state.orders = await response.json();
+        const json = await response.json();
+
+        // Support both the new paginated shape and a plain array (backwards compat).
+        state.orders = Array.isArray(json) ? json : (json.data || []);
         renderOrders();
     } catch (error) {
         ordersEmpty.textContent = 'Unable to load orders. Check MongoDB and restart the server.';
@@ -275,9 +307,24 @@ async function loadOrders() {
     }
 }
 
-socket.on('connect', () => setConnection('Live'));
-socket.on('disconnect', () => setConnection('Offline'));
-socket.on('connect_error', () => setConnection('Offline'));
+// ---------------------------------------------------------------------------
+// Socket event handlers (Section 3)
+// On reconnect, re-fetch the full order list to catch up on missed events.
+// ---------------------------------------------------------------------------
+socket.on('connect', () => {
+    setConnection('Live');
+    // Re-fetch full table on every (re)connect to catch missed updates.
+    loadOrders();
+});
+
+socket.on('disconnect', () => {
+    setConnection('Reconnecting…');
+});
+
+socket.on('connect_error', () => {
+    setConnection('Offline');
+});
+
 socket.on('order_update', applyRealtimeUpdate);
 
 searchInput.addEventListener('input', (event) => {

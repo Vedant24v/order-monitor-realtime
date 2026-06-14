@@ -96,6 +96,16 @@ h2 {
     background: var(--danger);
 }
 
+.dot.reconnecting {
+    background: #f59e0b;
+    animation: pulse-dot 1s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+}
+
 .summary {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
