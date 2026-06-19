@@ -1,6 +1,6 @@
 # Order Monitor
 
-Realtime order dashboard for the APT interview assignment: database changes propagate to browsers without polling.
+Realtime order dashboard : database changes propagate to browsers without polling.
 
 ## Approach
 
