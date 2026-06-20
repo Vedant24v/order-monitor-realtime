@@ -6,8 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "seed": "node seed.js"
+    "seed": "node seed.js",
+    "test": "node --test test/**/*.test.js"
   },
+
   "keywords": [
     "mongodb",
     "socket.io",
@@ -22,5 +24,8 @@
     "express": "^5.1.0",
     "mongodb": "^7.2.0",
     "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
   }
 }
