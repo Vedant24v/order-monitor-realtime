@@ -1,0 +1,73 @@
+# docker-compose.yml
+#
+# Starts the Order Monitor app + a single-node MongoDB replica set so that
+# change streams work out of the box — no manual `mongod --replSet` setup.
+#
+# Usage:
+#   docker compose up          # start everything
+#   docker compose up --build  # rebuild the app image first
+#   docker compose down -v     # stop and remove volumes
+#
+version: '3.9'
+
+services:
+  # ---------------------------------------------------------------------------
+  # MongoDB — single-node replica set (rs0) required for change streams.
+  # The `command` flag enables replica set mode on startup.
+  # The init container runs rs.initiate() once so the set is ready immediately.
+  # ---------------------------------------------------------------------------
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      # Wait until the replica set primary is elected before allowing dependents to start.
+      test: >
+        mongosh --quiet --eval
+        "try { rs.status().ok } catch(e) { rs.initiate().ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # One-shot init container — runs rs.initiate() and exits.
+  # Using a separate container avoids exec-ing into mongo at runtime.
+  # ---------------------------------------------------------------------------
+  mongo-init:
+    image: mongo:7
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: >
+      mongosh mongodb://mongo:27017 --quiet --eval
+      "rs.status().ok || rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] })"
+
+  # ---------------------------------------------------------------------------
+  # Order Monitor app
+  # ---------------------------------------------------------------------------
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      PORT: 5000
+      # Connect to the mongo service by its DNS name within the compose network.
+      # The replica set member name must also resolve, so we pass ?replicaSet=rs0
+      # and set directConnection=true (single-node rs).
+      MONGODB_URI: "mongodb://mongo:27017/?replicaSet=rs0&directConnection=true"
+      MONGODB_DB: realtime_orders
+      MONGODB_COLLECTION: orders
+      # Set a real token in production; leave empty to disable auth.
+      API_TOKEN: ""
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
