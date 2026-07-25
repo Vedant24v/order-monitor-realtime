@@ -11,39 +11,36 @@ Realtime order monitoring dashboard powered by Node.js, Express, Socket.IO, and 
 
 ---
 
-## Quick Start
+## How to Run from VS Code Terminal
 
-### 1. Install Dependencies
-```bash
+Open the integrated terminal in VS Code (`Ctrl + ~` or **Terminal ➔ New Terminal**) and execute:
+
+### Step 1: Install Dependencies
+```powershell
 npm install
 ```
 
-### 2. Environment Setup
+### Step 2: Set Up Environment Variables
 Copy `.env.example` to `.env`:
-```env
-PORT=5000
-PG_HOST=127.0.0.1
-PG_PORT=5432
-PG_USER=orderuser
-PG_PASSWORD=orderpass
-PG_DATABASE=ordersdb
-API_TOKEN=
+```powershell
+cp .env.example .env
 ```
 
-### 3. Initialize Database & Seed
-```bash
-# Initialize database schema
+### Step 3: Initialize Database & Seed Orders
+```powershell
+# Initialize database schema in PostgreSQL
 psql -h 127.0.0.1 -U orderuser -d ordersdb -f db/init.sql
 
-# Seed sample data
+# Seed initial sample orders
 npm run seed
 ```
 
-### 4. Start Server
-```bash
+### Step 4: Start the Application
+```powershell
 npm start
 ```
-Open [http://localhost:5000](http://localhost:5000) in your browser.
+
+Navigate to **[http://localhost:5000](http://localhost:5000)** in your web browser.
 
 ---
 
@@ -61,7 +58,7 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 
 ## Testing
 
-Run unit & integration tests:
-```bash
+Run unit & integration tests from VS Code terminal:
+```powershell
 npm test
 ```
