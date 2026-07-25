@@ -1,42 +1,53 @@
-# Order Monitor
+# Realtime Order Monitor
 
-Realtime order monitoring dashboard powered by Node.js, Express, Socket.IO, and PostgreSQL.
-
-## Features
-
-- ⚡ **Realtime Updates**: Instant order updates via WebSockets (Socket.IO).
-- 🗄️ **PostgreSQL Backend**: Persistent data store with cursor-based pagination.
-- 🔒 **Bearer Security**: Token-based authentication for REST API & WebSocket connections.
-- 📊 **Live Dashboard**: Interactive search filtering, order status metrics, and activity feed.
+A modern, high-performance realtime order monitoring dashboard powered by **Node.js, Express, Socket.IO, and PostgreSQL**.
 
 ---
 
-## How to Run from VS Code Terminal
+## 🌟 Features
 
-Open the integrated terminal in VS Code (`Ctrl + ~` or **Terminal ➔ New Terminal**) and execute:
+- ⚡ **Realtime Synchronization**: Instant multi-client updates via WebSockets (Socket.IO).
+- 🛠️ **Full Interactive CRUD**: Create, Edit, Delete, and 1-Click Status changes directly from the Web UI.
+- 🗄️ **PostgreSQL Backend**: Reliable persistence layer with cursor-based pagination.
+- 📡 **Kafka / Standalone Dual Mode**: Auto-detects Kafka for CDC or seamlessly runs in standalone PostgreSQL mode.
+- 🔒 **Bearer Token Security**: Optional token-based authentication for REST API & WebSockets.
+- 📊 **Live Analytics & Event Feed**: Real-time event log tracking every database operation.
+
+---
+
+## 🚀 Simple Steps to Run
+
+Follow these quick steps to get the application up and running:
 
 ### Step 1: Install Dependencies
-```powershell
+```cmd
 npm install
 ```
 
 ### Step 2: Set Up Environment Variables
-Copy `.env.example` to `.env`:
-```powershell
-cp .env.example .env
+Copy `.env.example` to create your local `.env` configuration:
+```cmd
+copy .env.example .env
 ```
 
-### Step 3: Initialize Database & Seed Orders
-```powershell
-# Initialize database schema in PostgreSQL
-psql -h 127.0.0.1 -U orderuser -d ordersdb -f db/init.sql
+### Step 3: Start PostgreSQL
+If using **Docker Desktop**, launch Docker and run:
+```cmd
+docker run -d --name postgres-db -p 5432:5432 -e POSTGRES_USER=orderuser -e POSTGRES_PASSWORD=orderpass -e POSTGRES_DB=ordersdb postgres:alpine
+```
+*(If running native PostgreSQL on Windows, ensure the PostgreSQL service is active on port 5432).*
 
-# Seed initial sample orders
+### Step 4: Initialize Database & Seed Sample Orders
+```cmd
+# Initialize database schema (No psql CLI required)
+npm run init-db
+
+# Seed initial sample order data
 npm run seed
 ```
 
-### Step 4: Start the Application
-```powershell
+### Step 5: Start the Server
+```cmd
 npm start
 ```
 
@@ -44,21 +55,21 @@ Navigate to **[http://localhost:5000](http://localhost:5000)** in your web brows
 
 ---
 
-## API Reference
+## 🛠️ API Reference
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/orders` | List orders (`?limit=50&cursor=<id>`) |
+| `GET` | `/orders` | Fetch orders (`?limit=50&cursor=<id>`) |
 | `POST` | `/orders` | Create a new order |
-| `PATCH` | `/orders/:id` | Update order details |
+| `PATCH` | `/orders/:id` | Update order details / status |
 | `DELETE` | `/orders/:id` | Delete an order |
-| `GET` | `/health` | Health check endpoint |
+| `GET` | `/health` | Health check status |
 
 ---
 
-## Testing
+## 🧪 Testing
 
-Run unit & integration tests from VS Code terminal:
-```powershell
+Run unit & integration tests:
+```cmd
 npm test
 ```
