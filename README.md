@@ -84,6 +84,52 @@ Navigate to **[http://localhost:5000](http://localhost:5000)** in your web brows
 
 ---
 
+## 🔄 Steps to Run with Debezium CDC & Kafka (Optional)
+
+If you wish to run the app with full **Change Data Capture (CDC)** via Debezium and Kafka:
+
+### 1. Enable PostgreSQL Logical Replication (`wal_level=logical`)
+Launch PostgreSQL with replication flags enabled:
+```cmd
+docker run -d --name postgres-db -p 5432:5432 -e POSTGRES_USER=orderuser -e POSTGRES_PASSWORD=orderpass -e POSTGRES_DB=ordersdb postgres:alpine postgres -c wal_level=logical -c max_replication_slots=4 -c max_wal_senders=4
+```
+
+### 2. Start Kafka & Zookeeper
+Launch Zookeeper and Kafka broker listening on `localhost:9092`.
+
+### 3. Register Debezium Postgres Connector
+POST the connector configuration to Kafka Connect (`http://localhost:8083/connectors`):
+```json
+{
+  "name": "postgres-orders-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "localhost",
+    "database.port": "5432",
+    "database.user": "orderuser",
+    "database.password": "orderpass",
+    "database.dbname": "ordersdb",
+    "topic.prefix": "ordermonitor",
+    "table.include.list": "public.orders",
+    "plugin.name": "pgoutput"
+  }
+}
+```
+
+### 4. Configure `.env` & Start App
+Ensure `.env` contains:
+```env
+KAFKA_BROKER=localhost:9092
+KAFKA_TOPIC=ordermonitor.public.orders
+```
+Start the application:
+```cmd
+npm start
+```
+The application will automatically detect Kafka, subscribe to the Debezium CDC topic, and broadcast database row changes live to all WebSocket clients!
+
+---
+
 ## 🛠️ API Reference
 
 | Method | Endpoint | Description |
