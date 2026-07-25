@@ -52,35 +52,7 @@ flowchart LR
 
 ---
 
-## Setup
-
-### Option A — Docker (fastest path)
-
-```bash
-docker compose up
-```
-
-This starts:
-- **PostgreSQL** with `wal_level=logical` for Debezium CDC.
-- **Zookeeper + Kafka** (Confluent 7.6) single-node broker.
-- **Debezium Kafka Connect** with the Postgres connector pre-configured.
-- The **Node.js app** on port 5000.
-
-Then open <http://localhost:5000>.
-
-To seed sample data:
-
-```bash
-docker compose exec app node seed.js
-```
-
-To register the Debezium connector (if not auto-registered):
-
-```bash
-bash debezium/register.sh
-```
-
-### Option B — Local Node.js + external services
+## Setup (Local Node.js & Native PostgreSQL)
 
 1. **Install dependencies:**
 
@@ -92,7 +64,7 @@ bash debezium/register.sh
 
    ```env
    PORT=5000
-   PG_HOST=localhost
+   PG_HOST=127.0.0.1
    PG_PORT=5432
    PG_USER=orderuser
    PG_PASSWORD=orderpass
@@ -103,46 +75,28 @@ bash debezium/register.sh
    API_TOKEN=
    ```
 
-3. **Start PostgreSQL** with logical replication enabled:
+3. **Start PostgreSQL server**:
+   Ensure PostgreSQL is running locally on port `5432`.
+
+4. **Apply the database schema:**
 
    ```bash
-   # Example using Docker:
-   docker run -d --name postgres \
-     -e POSTGRES_USER=orderuser \
-     -e POSTGRES_PASSWORD=orderpass \
-     -e POSTGRES_DB=ordersdb \
-     -p 5432:5432 \
-     postgres:16-alpine \
-     postgres -c wal_level=logical -c max_replication_slots=4 -c max_wal_senders=4
+   psql -h 127.0.0.1 -U orderuser -d ordersdb -f db/init.sql
    ```
 
-4. **Apply the schema:**
-
-   ```bash
-   psql -h localhost -U orderuser -d ordersdb -f db/init.sql
-   ```
-
-5. **Start Kafka + Debezium** (see `docker-compose.yml` for reference config).
-
-6. **Register the Debezium connector:**
-
-   ```bash
-   bash debezium/register.sh
-   ```
-
-7. **Seed sample orders:**
+5. **Seed sample orders:**
 
    ```bash
    npm run seed
    ```
 
-8. **Start the server:**
+6. **Start the application server:**
 
    ```bash
    npm start
    ```
 
-9. Open <http://localhost:5000>.
+7. Open <http://localhost:5000>.
 
 ---
 
@@ -268,4 +222,4 @@ io.adapter(createAdapter(pub, sub));
 
 ### Single Kafka consumer owner instance
 
-Only **one** process should own the Kafka consumer group to avoid duplicate events being emitted to clients. For multi-instance deployments, use a dedicated "change-stream worker" deployment separate from the API servers, or rely on Kafka's native consumer group protocol which assigns partitions exclusively to one consumer per group.
+Only **one** process should own the Kafka consumer group to avoid duplicate events being emitted to clients. For multi-instance deployments, use a dedicated "change-stream worker" separate from the API servers, or rely on Kafka's native consumer group protocol which assigns partitions exclusively to one consumer per group.
