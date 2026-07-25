@@ -3,14 +3,15 @@ require('dotenv').config({ quiet: true });
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const { ObjectId } = require('mongodb');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { Kafka } = require('kafkajs');
 const {
     connectToDatabase,
-    getOrdersCollection,
-    saveResumeToken,
-    getResumeToken
+    getOrders,
+    createOrder,
+    updateOrder,
+    deleteOrder
 } = require('./db');
 
 const app = express();
@@ -73,28 +74,6 @@ io.use((socket, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function toClientOrder(order) {
-    if (!order) {
-        return null;
-    }
-
-    return {
-        ...order,
-        _id: order._id?.toString()
-    };
-}
-
-function parseObjectId(id) {
-    if (!ObjectId.isValid(id)) {
-        return null;
-    }
-
-    return new ObjectId(id);
-}
-
-// ---------------------------------------------------------------------------
 // REST routes (Section 2 + Section 4 + Section 5)
 // ---------------------------------------------------------------------------
 
@@ -102,45 +81,19 @@ function parseObjectId(id) {
  * GET /orders
  * Supports cursor-based pagination:
  *   ?limit=50          – page size (default 50, max 200)
- *   ?cursor=<_id>      – last seen _id from previous page (returns docs older than this id)
+ *   ?cursor=<id>       – last seen id from previous page (integer)
  *
- * The change stream is the sole emitter of order_update events; these routes
- * only read/write MongoDB (Section 2).
+ * The Kafka consumer is the sole emitter of order_update events (Section 2).
+ * These routes only read/write PostgreSQL.
  */
 app.get('/orders', requireBearerToken, async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-        const cursor = req.query.cursor;
+        const cursor = req.query.cursor || null;
 
-        const query = {};
+        const result = await getOrders(limit, cursor);
 
-        if (cursor && ObjectId.isValid(cursor)) {
-            // Return orders with _id less than the cursor (older, for descending sort)
-            query._id = { $lt: new ObjectId(cursor) };
-        }
-
-        const orders = await getOrdersCollection()
-            .find(query, {
-                projection: {
-                    customer_name: 1,
-                    product_name: 1,
-                    status: 1,
-                    created_at: 1,
-                    updated_at: 1
-                }
-            })
-            .sort({ created_at: -1, _id: -1 })
-            .limit(limit)
-            .toArray();
-
-        const nextCursor = orders.length === limit
-            ? orders[orders.length - 1]._id.toString()
-            : null;
-
-        res.json({
-            data: orders.map(toClientOrder),
-            nextCursor
-        });
+        res.json(result);
     } catch (err) {
         console.error('Failed to fetch orders:', err.message);
         res.status(500).json({
@@ -151,27 +104,22 @@ app.get('/orders', requireBearerToken, async (req, res) => {
 
 app.post('/orders', requireBearerToken, async (req, res) => {
     try {
-        const order = {
-            customer_name: String(req.body.customer_name || '').trim(),
-            product_name: String(req.body.product_name || '').trim(),
-            status: String(req.body.status || 'pending').trim(),
-            created_at: new Date(),
-            updated_at: new Date()
-        };
+        const customer_name = String(req.body.customer_name || '').trim();
+        const product_name  = String(req.body.product_name  || '').trim();
+        const status        = String(req.body.status        || 'pending').trim();
 
-        if (!order.customer_name || !order.product_name) {
+        if (!customer_name || !product_name) {
             return res.status(400).json({
                 error: 'customer_name and product_name are required'
             });
         }
 
-        const result = await getOrdersCollection().insertOne(order);
-        const createdOrder = toClientOrder({ ...order, _id: result.insertedId });
+        const order = await createOrder({ customer_name, product_name, status });
 
-        // The change stream is the sole emitter of order_update events (Section 2).
+        // The Kafka consumer is the sole emitter of order_update events (Section 2).
         // No io.emit() here.
 
-        return res.status(201).json(createdOrder);
+        return res.status(201).json(order);
     } catch (err) {
         console.error('Failed to create order:', err.message);
         return res.status(500).json({
@@ -182,42 +130,34 @@ app.post('/orders', requireBearerToken, async (req, res) => {
 
 app.patch('/orders/:id', requireBearerToken, async (req, res) => {
     try {
-        const _id = parseObjectId(req.params.id);
+        const id = parseInt(req.params.id, 10);
 
-        if (!_id) {
+        if (!id || isNaN(id)) {
             return res.status(400).json({
                 error: 'Invalid order id'
             });
         }
 
-        const update = {
-            updated_at: new Date()
-        };
+        const fields = {};
 
         for (const field of ['customer_name', 'product_name', 'status']) {
             if (req.body[field] !== undefined) {
-                update[field] = String(req.body[field]).trim();
+                fields[field] = String(req.body[field]).trim();
             }
         }
 
-        const result = await getOrdersCollection().updateOne(
-            { _id },
-            { $set: update }
-        );
+        const order = await updateOrder(id, fields);
 
-        if (result.matchedCount === 0) {
+        if (!order) {
             return res.status(404).json({
                 error: 'Order not found'
             });
         }
 
-        const resultOrder = await getOrdersCollection().findOne({ _id });
-        const updatedOrder = toClientOrder(resultOrder);
-
-        // The change stream is the sole emitter of order_update events (Section 2).
+        // The Kafka consumer is the sole emitter of order_update events (Section 2).
         // No io.emit() here.
 
-        return res.json(updatedOrder);
+        return res.json(order);
     } catch (err) {
         console.error('Failed to update order:', err.message);
         return res.status(500).json({
@@ -228,29 +168,26 @@ app.patch('/orders/:id', requireBearerToken, async (req, res) => {
 
 app.delete('/orders/:id', requireBearerToken, async (req, res) => {
     try {
-        const _id = parseObjectId(req.params.id);
+        const id = parseInt(req.params.id, 10);
 
-        if (!_id) {
+        if (!id || isNaN(id)) {
             return res.status(400).json({
                 error: 'Invalid order id'
             });
         }
 
-        const result = await getOrdersCollection().findOne({ _id });
+        const order = await deleteOrder(id);
 
-        if (!result) {
+        if (!order) {
             return res.status(404).json({
                 error: 'Order not found'
             });
         }
 
-        await getOrdersCollection().deleteOne({ _id });
-        const deletedOrder = toClientOrder(result);
-
-        // The change stream is the sole emitter of order_update events (Section 2).
+        // The Kafka consumer is the sole emitter of order_update events (Section 2).
         // No io.emit() here.
 
-        return res.json(deletedOrder);
+        return res.json(order);
     } catch (err) {
         console.error('Failed to delete order:', err.message);
         return res.status(500).json({
@@ -262,7 +199,7 @@ app.delete('/orders/:id', requireBearerToken, async (req, res) => {
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
-        database: 'mongodb',
+        database: 'postgresql',
         service: 'order-monitor'
     });
 });
@@ -287,64 +224,106 @@ io.on('connection', (socket) => {
 });
 
 // ---------------------------------------------------------------------------
-// Change stream (Section 1)
+// Kafka consumer — Debezium CDC events (replaces MongoDB change stream)
 // ---------------------------------------------------------------------------
-function startChangeStream() {
-    let changeStream;
-    const resumeToken = getResumeToken();
+// Debezium emits a JSON envelope with:
+//   op:     'c' (insert), 'u' (update), 'd' (delete), 'r' (snapshot read)
+//   before: row state before the change (null for inserts)
+//   after:  row state after the change  (null for deletes)
+//
+// Timestamps arrive as epoch microseconds when time.precision.mode=adaptive
+// or as ISO strings when time.precision.mode=connect (our config uses connect).
+// ---------------------------------------------------------------------------
+function buildOrderPayload(op, before, after) {
+    let operation;
+    let data;
 
-    const watchOptions = { fullDocument: 'updateLookup' };
-
-    if (resumeToken) {
-        watchOptions.resumeAfter = resumeToken;
-        console.log('Resuming change stream from saved token.');
+    if (op === 'c' || op === 'r') {
+        operation = 'INSERT';
+        data = after;
+    } else if (op === 'u') {
+        operation = 'UPDATE';
+        data = after;
+    } else if (op === 'd') {
+        operation = 'DELETE';
+        data = before;
+    } else {
+        return null;
     }
 
-    try {
-        changeStream = getOrdersCollection().watch([], watchOptions);
-    } catch (err) {
-        console.error('MongoDB change streams unavailable:', err.message);
-        console.log('Retrying change stream in 2 000 ms…');
-        setTimeout(startChangeStream, 2000);
-        return;
-    }
+    return { operation, data };
+}
 
-    changeStream.on('change', (change) => {
-        // Persist token before emitting so a crash after a write is still safe.
-        saveResumeToken(change._id);
+async function startKafkaConsumer() {
+    const broker  = process.env.KAFKA_BROKER || 'localhost:9092';
+    const topic   = process.env.KAFKA_TOPIC  || 'ordermonitor.public.orders';
 
-        const operation = change.operationType.toUpperCase();
-        const data = toClientOrder(change.fullDocument) || {
-            _id: change.documentKey?._id?.toString()
-        };
-
-        const payload = { operation, data };
-
-        // Emit to the matching room (customer/dashboard scope) AND always
-        // broadcast to the global room so the default dashboard stays current.
-        const roomFromDoc = data?.room; // optional field on the document itself
-
-        if (roomFromDoc) {
-            io.to(roomFromDoc).emit('order_update', payload);
+    const kafka = new Kafka({
+        clientId: 'order-monitor',
+        brokers:  [broker],
+        retry: {
+            initialRetryTime: 3000,
+            retries: 20
         }
-
-        io.to(GLOBAL_ROOM).emit('order_update', payload);
     });
 
-    changeStream.on('error', (err) => {
-        console.error('Change stream error:', err.message);
+    const consumer = kafka.consumer({ groupId: 'order-monitor-group' });
 
-        changeStream.close().catch(() => {});
+    let connected = false;
 
-        console.log('Retrying change stream in 2 000 ms…');
-        setTimeout(startChangeStream, 2000);
+    while (!connected) {
+        try {
+            await consumer.connect();
+            connected = true;
+        } catch (err) {
+            console.error('Kafka connect error, retrying in 5s:', err.message);
+            await new Promise((r) => setTimeout(r, 5000));
+        }
+    }
+
+    await consumer.subscribe({ topic, fromBeginning: false });
+
+    await consumer.run({
+        eachMessage: async ({ message }) => {
+            if (!message.value) {
+                return; // tombstone / delete marker key-only message
+            }
+
+            let envelope;
+
+            try {
+                envelope = JSON.parse(message.value.toString());
+            } catch (err) {
+                console.error('Failed to parse Kafka message:', err.message);
+                return;
+            }
+
+            // Debezium wraps the payload inside a "payload" key when schema is included.
+            const payload = envelope.payload || envelope;
+            const { op, before, after } = payload;
+
+            const result = buildOrderPayload(op, before, after);
+
+            if (!result) {
+                return;
+            }
+
+            const { operation, data } = result;
+
+            // Emit to any customer/dashboard room AND to the global room.
+            const roomFromDoc = data?.room;
+
+            if (roomFromDoc) {
+                io.to(roomFromDoc).emit('order_update', { operation, data });
+            }
+
+            io.to(GLOBAL_ROOM).emit('order_update', { operation, data });
+
+            console.log(`[kafka] ${operation} order id=${data?.id}`);
+        }
     });
 
-    changeStream.on('close', () => {
-        console.log('Change stream closed.');
-    });
-
-    console.log('Listening for MongoDB order changes…');
+    console.log(`Kafka consumer listening on topic "${topic}"…`);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +331,12 @@ function startChangeStream() {
 // ---------------------------------------------------------------------------
 async function start() {
     await connectToDatabase();
-    startChangeStream();
+    console.log('Connected to PostgreSQL.');
+
+    // Start Kafka consumer in the background — do not block server startup.
+    startKafkaConsumer().catch((err) => {
+        console.error('Kafka consumer fatal error:', err.message);
+    });
 
     server.listen(PORT, () => {
         console.log(`Server running on http://localhost:${PORT}`);
@@ -360,7 +344,7 @@ async function start() {
 }
 
 start().catch((err) => {
-    console.error('Could not connect to MongoDB:', err.message);
+    console.error('Could not connect to PostgreSQL:', err.message);
 
     server.listen(PORT, () => {
         console.log(`Server running on http://localhost:${PORT}`);

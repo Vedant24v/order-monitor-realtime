@@ -1,7 +1,7 @@
 {
-  "name": "order-monitor-mongodb",
+  "name": "order-monitor-realtime",
   "version": "1.0.0",
-  "description": "Minimal realtime order dashboard using MongoDB and Socket.IO.",
+  "description": "Realtime order dashboard — PostgreSQL + Debezium CDC via Kafka + Socket.IO.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,7 +11,9 @@
   },
 
   "keywords": [
-    "mongodb",
+    "postgresql",
+    "debezium",
+    "kafka",
     "socket.io",
     "realtime",
     "orders"
@@ -22,7 +24,8 @@
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
-    "mongodb": "^7.2.0",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.13.3",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
