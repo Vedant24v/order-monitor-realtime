@@ -116,8 +116,8 @@ app.post('/orders', requireBearerToken, async (req, res) => {
 
         const order = await createOrder({ customer_name, product_name, status });
 
-        // The Kafka consumer is the sole emitter of order_update events (Section 2).
-        // No io.emit() here.
+        // Emit real-time update to connected clients
+        io.to(GLOBAL_ROOM).emit('order_update', { operation: 'INSERT', data: order });
 
         return res.status(201).json(order);
     } catch (err) {
@@ -154,8 +154,8 @@ app.patch('/orders/:id', requireBearerToken, async (req, res) => {
             });
         }
 
-        // The Kafka consumer is the sole emitter of order_update events (Section 2).
-        // No io.emit() here.
+        // Emit real-time update to connected clients
+        io.to(GLOBAL_ROOM).emit('order_update', { operation: 'UPDATE', data: order });
 
         return res.json(order);
     } catch (err) {
@@ -184,8 +184,8 @@ app.delete('/orders/:id', requireBearerToken, async (req, res) => {
             });
         }
 
-        // The Kafka consumer is the sole emitter of order_update events (Section 2).
-        // No io.emit() here.
+        // Emit real-time update to connected clients
+        io.to(GLOBAL_ROOM).emit('order_update', { operation: 'DELETE', data: order });
 
         return res.json(order);
     } catch (err) {
@@ -270,14 +270,20 @@ async function startKafkaConsumer() {
     const consumer = kafka.consumer({ groupId: 'order-monitor-group' });
 
     let connected = false;
+    let attempts = 0;
+    const maxAttempts = 3;
 
-    while (!connected) {
+    while (!connected && attempts < maxAttempts) {
         try {
+            attempts++;
             await consumer.connect();
             connected = true;
         } catch (err) {
-            console.error('Kafka connect error, retrying in 5s:', err.message);
-            await new Promise((r) => setTimeout(r, 5000));
+            if (attempts >= maxAttempts) {
+                console.log('Kafka broker not available (running in standalone PostgreSQL mode).');
+                return;
+            }
+            await new Promise((r) => setTimeout(r, 2000));
         }
     }
 

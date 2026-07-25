@@ -1,225 +1,67 @@
 # Order Monitor
 
-Realtime order dashboard: database changes propagate to every connected browser without polling.
+Realtime order monitoring dashboard powered by Node.js, Express, Socket.IO, and PostgreSQL.
+
+## Features
+
+- ⚡ **Realtime Updates**: Instant order updates via WebSockets (Socket.IO).
+- 🗄️ **PostgreSQL Backend**: Persistent data store with cursor-based pagination.
+- 🔒 **Bearer Security**: Token-based authentication for REST API & WebSocket connections.
+- 📊 **Live Dashboard**: Interactive search filtering, order status metrics, and activity feed.
 
 ---
 
-## Architecture
+## Quick Start
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Browser (Socket.IO client)                                    │
-│    • Renders orders table + event feed                         │
-│    • On reconnect → re-fetches /orders to catch missed events  │
-└───────────────────────────┬────────────────────────────────────┘
-                            │ WebSocket (Socket.IO)
-                            │ REST (fetch with Bearer token)
-┌───────────────────────────▼────────────────────────────────────┐
-│  Node.js  /  Express  /  Socket.IO server                      │
-│    • REST routes: read/write PostgreSQL only                   │
-│    • Kafka consumer: sole emitter of order_update events       │
-│    • Room-scoped emits: io.to(room).emit(…)                    │
-└───────────────────────────┬────────────────────────────────────┘
-                            │ KafkaJS consumer
-┌───────────────────────────▼────────────────────────────────────┐
-│  Apache Kafka                                                  │
-│    • Topic: ordermonitor.public.orders                         │
-│    • Produced by Debezium Postgres connector                   │
-└───────────────────────────┬────────────────────────────────────┘
-                            │ Debezium CDC (logical replication)
-┌───────────────────────────▼────────────────────────────────────┐
-│  PostgreSQL (wal_level=logical)                                │
-│    • orders table                                              │
-│    • INSERT / UPDATE / DELETE → Debezium → Kafka → Node.js    │
-└────────────────────────────────────────────────────────────────┘
-```
-
-Or as a Mermaid diagram:
-
-```mermaid
-flowchart LR
-    Browser["Browser\n(Socket.IO client)"]
-    Server["Node.js / Express / Socket.IO"]
-    Kafka["Apache Kafka\n(Debezium topic)"]
-    Postgres["PostgreSQL\n(wal_level=logical)"]
-
-    Browser -- "REST (Bearer token)" --> Server
-    Server -- "order_update (WebSocket)" --> Browser
-    Postgres -- "logical replication" --> Kafka
-    Kafka -- "KafkaJS consumer" --> Server
-    Server -- "read / write" --> Postgres
-```
-
----
-
-## Setup (Local Node.js & Native PostgreSQL)
-
-1. **Install dependencies:**
-
-   ```bash
-   npm install
-   ```
-
-2. **Copy `.env.example` to `.env`** and update as needed:
-
-   ```env
-   PORT=5000
-   PG_HOST=127.0.0.1
-   PG_PORT=5432
-   PG_USER=orderuser
-   PG_PASSWORD=orderpass
-   PG_DATABASE=ordersdb
-   KAFKA_BROKER=localhost:9092
-   KAFKA_TOPIC=ordermonitor.public.orders
-   # Leave blank to disable bearer-token auth (development only)
-   API_TOKEN=
-   ```
-
-3. **Start PostgreSQL server**:
-   Ensure PostgreSQL is running locally on port `5432`.
-
-4. **Apply the database schema:**
-
-   ```bash
-   psql -h 127.0.0.1 -U orderuser -d ordersdb -f db/init.sql
-   ```
-
-5. **Seed sample orders:**
-
-   ```bash
-   npm run seed
-   ```
-
-6. **Start the application server:**
-
-   ```bash
-   npm start
-   ```
-
-7. Open <http://localhost:5000>.
-
----
-
-## API
-
-All routes require a `Bearer` token when `API_TOKEN` is set in `.env`.
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `GET` | `/orders?limit=50&cursor=<id>` | Paginated order list (cursor = last `id`) |
-| `POST` | `/orders` | Create order |
-| `PATCH` | `/orders/:id` | Update order fields |
-| `DELETE` | `/orders/:id` | Delete order |
-| `GET` | `/health` | Health check |
-
----
-
-## Security
-
-### Bearer-token authentication
-
-Set `API_TOKEN` in `.env` to a strong random string:
-
+### 1. Install Dependencies
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+npm install
 ```
 
-All REST endpoints return `401` if the `Authorization: Bearer <token>` header is missing or wrong.
-
-Socket.IO connections are rejected unless the client passes the same token in the handshake:
-
-```js
-const socket = io({ auth: { token: 'your-token' } });
+### 2. Environment Setup
+Copy `.env.example` to `.env`:
+```env
+PORT=5000
+PG_HOST=127.0.0.1
+PG_PORT=5432
+PG_USER=orderuser
+PG_PASSWORD=orderpass
+PG_DATABASE=ordersdb
+API_TOKEN=
 ```
 
-Leave `API_TOKEN` empty (or unset) to disable auth — useful for local development.
+### 3. Initialize Database & Seed
+```bash
+# Initialize database schema
+psql -h 127.0.0.1 -U orderuser -d ordersdb -f db/init.sql
 
-> **Note:** The browser client reads `window.__API_TOKEN__` injected by the server. For a
-> production deployment, inject it via a `<script>` tag server-rendered into `index.html`
-> (never commit real tokens to source).
+# Seed sample data
+npm run seed
+```
+
+### 4. Start Server
+```bash
+npm start
+```
+Open [http://localhost:5000](http://localhost:5000) in your browser.
 
 ---
 
-## Running tests
+## API Reference
 
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/orders` | List orders (`?limit=50&cursor=<id>`) |
+| `POST` | `/orders` | Create a new order |
+| `PATCH` | `/orders/:id` | Update order details |
+| `DELETE` | `/orders/:id` | Delete an order |
+| `GET` | `/health` | Health check endpoint |
+
+---
+
+## Testing
+
+Run unit & integration tests:
 ```bash
 npm test
 ```
-
-Uses the Node.js built-in test runner (`node --test`). Requires PostgreSQL running and accessible.
-
-Tests cover:
-- `POST /orders` → `201` + correct document shape (integer `id`, all fields present).
-- `POST /orders` → triggers a Socket.IO `order_update` event with `operation: 'INSERT'`.
-
----
-
-## Test database changes (psql or any Postgres client)
-
-```sql
--- Connect to the database
-\c ordersdb
-
--- Insert a new order
-INSERT INTO orders (customer_name, product_name, status, created_at, updated_at)
-VALUES ('Your Name', 'Mouse', 'pending', NOW(), NOW());
-
--- Update an order
-UPDATE orders
-SET status = 'delivered', updated_at = NOW()
-WHERE customer_name = 'Your Name';
-```
-
-The dashboard at <http://localhost:5000> updates without a page refresh (requires Debezium + Kafka running).
-
----
-
-## Design Decisions & Tradeoffs
-
-### Why Debezium CDC over polling?
-
-Polling introduces a fixed latency equal to the poll interval and burns database I/O even when nothing has changed. Debezium uses PostgreSQL logical replication (`wal_level=logical`), which is push-based: changes are streamed from the WAL within milliseconds of a write, with zero wasted reads.
-
-### Why Kafka as the CDC transport?
-
-Kafka decouples the database change stream from the application:
-- **Durability**: events are persisted in Kafka and can be replayed.
-- **Offset management**: the Kafka consumer group tracks its position, equivalent to MongoDB's resume tokens — the server picks up exactly where it left off after a restart.
-- **Scalability**: multiple consumer instances can read the same topic; Kafka handles fan-out without extra work from the database.
-
-### Delivery guarantee
-
-| Layer | Guarantee |
-|-------|-----------|
-| Debezium + Kafka offset | Server replays any events missed during a restart |
-| `socket.on('connect')` refetch | Client re-fetches the full order list on every (re)connect, catching events missed while the WebSocket was down |
-| Combined | At-least-once delivery to the browser; duplicates are idempotent (upsert by `id`) |
-
----
-
-## Scaling Beyond a Single Instance
-
-### Room-scoped emits
-
-The server emits events to named Socket.IO rooms instead of broadcasting globally. Clients join a room via `socket.handshake.auth.room` (e.g. `'customer:42'` or the default `'all_orders'` room). This reduces unnecessary work on clients that do not need every event.
-
-### Socket.IO Redis adapter for multi-instance
-
-When running more than one Node.js process (horizontal scaling or PM2 cluster), Socket.IO rooms exist only in process memory. Add the Redis adapter to synchronise:
-
-```bash
-npm install @socket.io/redis-adapter ioredis
-```
-
-```js
-const { createAdapter } = require('@socket.io/redis-adapter');
-const { createClient } = require('ioredis');
-
-const pub = createClient({ host: 'redis' });
-const sub = pub.duplicate();
-io.adapter(createAdapter(pub, sub));
-```
-
-### Single Kafka consumer owner instance
-
-Only **one** process should own the Kafka consumer group to avoid duplicate events being emitted to clients. For multi-instance deployments, use a dedicated "change-stream worker" separate from the API servers, or rely on Kafka's native consumer group protocol which assigns partitions exclusively to one consumer per group.
