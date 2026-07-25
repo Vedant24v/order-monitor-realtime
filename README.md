@@ -9,15 +9,45 @@ A modern, high-performance realtime order monitoring dashboard powered by **Node
 - ⚡ **Realtime Synchronization**: Instant multi-client updates via WebSockets (Socket.IO).
 - 🛠️ **Full Interactive CRUD**: Create, Edit, Delete, and 1-Click Status changes directly from the Web UI.
 - 🗄️ **PostgreSQL Backend**: Reliable persistence layer with cursor-based pagination.
-- 📡 **Kafka / Standalone Dual Mode**: Auto-detects Kafka for CDC or seamlessly runs in standalone PostgreSQL mode.
+- 🔄 **Dual Execution Modes**:
+  - **Standalone PostgreSQL Mode** *(Default)*: Direct, fast local execution without external dependencies.
+  - **Debezium CDC + Kafka Mode** *(Optional)*: Asynchronous Change Data Capture from PostgreSQL write-ahead logs (WAL).
 - 🔒 **Bearer Token Security**: Optional token-based authentication for REST API & WebSockets.
 - 📊 **Live Analytics & Event Feed**: Real-time event log tracking every database operation.
 
 ---
 
-## 🚀 Simple Steps to Run
+## 🏗️ Architecture & Debezium CDC
 
-Follow these quick steps to get the application up and running:
+### 1. Standalone PostgreSQL Mode (Default)
+In standalone mode, the Node.js server reads and writes directly to PostgreSQL. REST operations instantly trigger Socket.IO WebSocket broadcasts (`order_update`), updating every connected browser dashboard in real time.
+
+```
+┌────────────────────────────────┐
+│  Browser (Socket.IO Client)    │
+└───────────────┬────────────────┘
+                │ WebSocket / REST
+┌───────────────▼────────────────┐
+│  Node.js / Express Server      │
+└───────────────┬────────────────┘
+                │ SQL Queries (pg)
+┌───────────────▼────────────────┐
+│  PostgreSQL Database           │
+└────────────────────────────────┘
+```
+
+### 2. Debezium CDC + Kafka Mode (Optional Enterprise Setup)
+For enterprise microservice architectures, PostgreSQL can be configured with `wal_level=logical`. Database writes trigger **Debezium CDC**, streaming row-level mutations to **Apache Kafka**. The Node.js server consumes Kafka topics and broadcasts updates, ensuring even external database writes propagate to browsers in real time.
+
+```
+PostgreSQL (WAL) ──> Debezium Connector ──> Kafka Topic ──> Node.js Consumer ──> Socket.IO ──> Browser
+```
+
+---
+
+## 🚀 Simple Steps to Run (Standalone Mode)
+
+Follow these quick steps to get the application up and running locally:
 
 ### Step 1: Install Dependencies
 ```cmd
@@ -31,11 +61,10 @@ copy .env.example .env
 ```
 
 ### Step 3: Start PostgreSQL
-If using **Docker Desktop**, launch Docker and run:
+Ensure your local PostgreSQL service is running on port `5432` *(or launch a container via Docker Desktop)*:
 ```cmd
 docker run -d --name postgres-db -p 5432:5432 -e POSTGRES_USER=orderuser -e POSTGRES_PASSWORD=orderpass -e POSTGRES_DB=ordersdb postgres:alpine
 ```
-*(If running native PostgreSQL on Windows, ensure the PostgreSQL service is active on port 5432).*
 
 ### Step 4: Initialize Database & Seed Sample Orders
 ```cmd
