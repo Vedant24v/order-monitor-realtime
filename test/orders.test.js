@@ -2,8 +2,7 @@
  * Integration tests using Node.js built-in test runner (node --test).
  *
  * Prerequisites:
- *   - MongoDB running as a replica set on MONGODB_URI (or the default
- *     mongodb://127.0.0.1:27017). Change streams require a replica set.
+ *   - PostgreSQL running and accessible via the PG_* env vars (or defaults).
  *   - The test starts the Express/Socket.IO server on a random free port so it
  *     does not conflict with a running dev server.
  *
@@ -16,7 +15,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { ioc: ioClient } = require('socket.io-client');
+const { io: ioClient } = require('socket.io-client');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,7 +92,7 @@ before(async () => {
     process.env.API_TOKEN = ''; // auth disabled during tests
 
     // Dynamically require *after* setting env vars so dotenv picks them up.
-    // We wrap in a try/catch: if MongoDB is unavailable the tests will still
+    // We wrap in a try/catch: if PostgreSQL is unavailable the tests will still
     // start but individual assertions will fail (no false-green on import errors).
     const app = require('../server');
     baseUrl = `http://127.0.0.1:${port}`;
@@ -120,8 +119,8 @@ test('POST /orders returns 201 with the correct document shape', async () => {
     assert.equal(status, 201, `Expected 201 but got ${status}`);
 
     // Shape assertions
-    assert.ok(body._id, 'Response must include _id');
-    assert.equal(typeof body._id, 'string', '_id must be a string');
+    assert.ok(body.id, 'Response must include id');
+    assert.equal(typeof body.id, 'number', 'id must be a number (PostgreSQL SERIAL)');
     assert.equal(body.customer_name, 'Test Customer');
     assert.equal(body.product_name, 'Widget Pro');
     assert.equal(body.status, 'pending');
