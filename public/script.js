@@ -41,7 +41,7 @@ function escapeHtml(value) {
 }
 
 function orderId(order) {
-    return String(order?._id || order?.id || '');
+    return String(order?.id || '');
 }
 
 function shortId(order) {
