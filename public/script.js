@@ -301,7 +301,7 @@ async function loadOrders() {
         state.orders = Array.isArray(json) ? json : (json.data || []);
         renderOrders();
     } catch (error) {
-        ordersEmpty.textContent = 'Unable to load orders. Check MongoDB and restart the server.';
+        ordersEmpty.textContent = 'Unable to load orders. Check the server and database connection.';
         ordersEmpty.parentElement.classList.add('is-empty');
         console.warn('Orders are unavailable:', error);
     }
