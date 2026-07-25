@@ -255,15 +255,22 @@ function buildOrderPayload(op, before, after) {
 }
 
 async function startKafkaConsumer() {
+    if (process.env.DISABLE_KAFKA === 'true') {
+        console.log('Kafka disabled (running in standalone PostgreSQL mode).');
+        return;
+    }
+
     const broker  = process.env.KAFKA_BROKER || 'localhost:9092';
     const topic   = process.env.KAFKA_TOPIC  || 'ordermonitor.public.orders';
 
+    const { logLevel } = require('kafkajs');
     const kafka = new Kafka({
         clientId: 'order-monitor',
         brokers:  [broker],
+        logLevel: logLevel.NOTHING,
         retry: {
-            initialRetryTime: 3000,
-            retries: 20
+            initialRetryTime: 1000,
+            retries: 2
         }
     });
 
@@ -271,7 +278,7 @@ async function startKafkaConsumer() {
 
     let connected = false;
     let attempts = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 2;
 
     while (!connected && attempts < maxAttempts) {
         try {
@@ -280,10 +287,10 @@ async function startKafkaConsumer() {
             connected = true;
         } catch (err) {
             if (attempts >= maxAttempts) {
-                console.log('Kafka broker not available (running in standalone PostgreSQL mode).');
+                console.log('Kafka broker not reachable (running in standalone PostgreSQL mode).');
                 return;
             }
-            await new Promise((r) => setTimeout(r, 2000));
+            await new Promise((r) => setTimeout(r, 1000));
         }
     }
 
