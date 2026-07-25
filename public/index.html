@@ -35,7 +35,8 @@
         </section>
 
         <section class="toolbar">
-            <input id="searchInput" type="search" placeholder="Search orders">
+            <input id="searchInput" type="search" placeholder="Search orders...">
+            <button id="createOrderBtn" type="button" class="btn-primary">+ Create Order</button>
             <button id="clearFeed" type="button">Clear Feed</button>
         </section>
 
@@ -52,6 +53,7 @@
                                 <th>Customer</th>
                                 <th>Product</th>
                                 <th>Status</th>
+                                <th style="text-align: right;">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="ordersBody"></tbody>
@@ -71,7 +73,43 @@
         </section>
     </main>
 
+    <!-- Modal for Create / Edit Order -->
+    <div id="orderModal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">Create New Order</h3>
+                <button id="closeModalBtn" type="button" class="close-btn">&times;</button>
+            </div>
+            <form id="orderForm">
+                <input type="hidden" id="orderId">
+                <div class="form-group">
+                    <label for="customerName">Customer Name</label>
+                    <input type="text" id="customerName" placeholder="e.g. Rahul Verma" required>
+                </div>
+                <div class="form-group">
+                    <label for="productName">Product Name</label>
+                    <input type="text" id="productName" placeholder="e.g. Noise Cancelling Headphones" required>
+                </div>
+                <div class="form-group">
+                    <label for="orderStatus">Status</label>
+                    <select id="orderStatus" class="select-input">
+                        <option value="pending">pending</option>
+                        <option value="processing">processing</option>
+                        <option value="packed">packed</option>
+                        <option value="shipped">shipped</option>
+                        <option value="delivered">delivered</option>
+                        <option value="cancelled">cancelled</option>
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" id="cancelModalBtn">Cancel</button>
+                    <button type="submit" class="btn-primary" id="saveOrderBtn">Save Order</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script src="/socket.io/socket.io.js"></script>
-    <script src="script.js?v=4"></script>
+    <script src="script.js?v=5"></script>
 </body>
 </html>
