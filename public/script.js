@@ -179,14 +179,35 @@ function renderOrders() {
         ].join(' ').toLowerCase().includes(query);
     });
 
-    ordersBody.innerHTML = filtered.map((order) => `
+    const statusOptions = ['pending', 'processing', 'packed', 'shipped', 'delivered', 'cancelled'];
+
+    ordersBody.innerHTML = filtered.map((order) => {
+        const id = orderId(order);
+        const currentStatus = String(order.status || 'pending').toLowerCase();
+        
+        const optionsHtml = statusOptions.map((st) => `
+            <option value="${st}" ${st === currentStatus ? 'selected' : ''}>${st}</option>
+        `).join('');
+
+        return `
         <tr>
-            <td>${escapeHtml(shortId(order))}</td>
+            <td><strong>#${escapeHtml(shortId(order))}</strong></td>
             <td>${escapeHtml(order.customer_name || '-')}</td>
             <td>${escapeHtml(order.product_name || '-')}</td>
-            <td><span class="status-pill">${escapeHtml(order.status || '-')}</span></td>
+            <td>
+                <select class="status-select" data-id="${id}" onchange="quickUpdateStatus('${id}', this.value)">
+                    ${optionsHtml}
+                </select>
+            </td>
+            <td>
+                <div class="action-btn-group">
+                    <button class="btn-sm" type="button" onclick="openEditModal('${id}')">Edit</button>
+                    <button class="btn-sm btn-danger" type="button" onclick="confirmDeleteOrder('${id}')">Delete</button>
+                </div>
+            </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 
     ordersEmpty.parentElement.classList.toggle('is-empty', filtered.length === 0);
     renderMetrics();
@@ -326,6 +347,140 @@ socket.on('connect_error', () => {
 });
 
 socket.on('order_update', applyRealtimeUpdate);
+
+// ---------------------------------------------------------------------------
+// CRUD Interactive Actions (Section 4 + Section 5)
+// ---------------------------------------------------------------------------
+
+const orderModal = document.getElementById('orderModal');
+const modalTitle = document.getElementById('modalTitle');
+const orderForm = document.getElementById('orderForm');
+const orderIdInput = document.getElementById('orderId');
+const customerNameInput = document.getElementById('customerName');
+const productNameInput = document.getElementById('productName');
+const orderStatusInput = document.getElementById('orderStatus');
+const createOrderBtn = document.getElementById('createOrderBtn');
+const closeModalBtn = document.getElementById('closeModalBtn');
+const cancelModalBtn = document.getElementById('cancelModalBtn');
+
+function getAuthHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_TOKEN) {
+        headers['Authorization'] = `Bearer ${API_TOKEN}`;
+    }
+    return headers;
+}
+
+function openCreateModal() {
+    modalTitle.textContent = 'Create New Order';
+    orderIdInput.value = '';
+    customerNameInput.value = '';
+    productNameInput.value = '';
+    orderStatusInput.value = 'pending';
+    orderModal.classList.remove('hidden');
+}
+
+function openEditModal(id) {
+    const order = state.orders.find((item) => orderId(item) === String(id));
+    if (!order) return;
+
+    modalTitle.textContent = `Edit Order #${shortId(order)}`;
+    orderIdInput.value = id;
+    customerNameInput.value = order.customer_name || '';
+    productNameInput.value = order.product_name || '';
+    orderStatusInput.value = (order.status || 'pending').toLowerCase();
+    orderModal.classList.remove('hidden');
+}
+
+function closeModal() {
+    orderModal.classList.add('hidden');
+}
+
+async function quickUpdateStatus(id, newStatus) {
+    try {
+        const response = await fetch(`/orders/${id}`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ status: newStatus })
+        });
+        if (!response.ok) {
+            throw new Error('Failed to update status');
+        }
+    } catch (err) {
+        alert(`Error updating order status: ${err.message}`);
+        loadOrders();
+    }
+}
+
+async function confirmDeleteOrder(id) {
+    const order = state.orders.find((item) => orderId(item) === String(id));
+    const name = order ? order.customer_name : `#${id}`;
+    
+    if (!confirm(`Are you sure you want to delete the order for "${name}"?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/orders/${id}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+        if (!response.ok) {
+            throw new Error('Failed to delete order');
+        }
+    } catch (err) {
+        alert(`Error deleting order: ${err.message}`);
+    }
+}
+
+orderForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = orderIdInput.value.trim();
+    const customer_name = customerNameInput.value.trim();
+    const product_name = productNameInput.value.trim();
+    const status = orderStatusInput.value.trim();
+
+    if (!customer_name || !product_name) {
+        alert('Please enter customer name and product name.');
+        return;
+    }
+
+    try {
+        let response;
+        if (id) {
+            // Edit existing order (PATCH)
+            response = await fetch(`/orders/${id}`, {
+                method: 'PATCH',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ customer_name, product_name, status })
+            });
+        } else {
+            // Create new order (POST)
+            response = await fetch('/orders', {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ customer_name, product_name, status })
+            });
+        }
+
+        if (!response.ok) {
+            throw new Error('Save failed');
+        }
+
+        closeModal();
+    } catch (err) {
+        alert(`Error saving order: ${err.message}`);
+    }
+});
+
+if (createOrderBtn) createOrderBtn.addEventListener('click', openCreateModal);
+if (closeModalBtn) closeModalBtn.addEventListener('click', closeModal);
+if (cancelModalBtn) cancelModalBtn.addEventListener('click', closeModal);
+
+// Make functions globally accessible for inline onclick attributes
+window.quickUpdateStatus = quickUpdateStatus;
+window.openEditModal = openEditModal;
+window.confirmDeleteOrder = confirmDeleteOrder;
 
 searchInput.addEventListener('input', (event) => {
     state.filter = event.target.value;
