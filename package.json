@@ -8,6 +8,7 @@
     "dev": "node server.js",
     "init-db": "node init-db.js",
     "seed": "node seed.js",
+    "register-connector": "node debezium/register.js",
     "test": "node --test test/**/*.test.js"
   },
 
