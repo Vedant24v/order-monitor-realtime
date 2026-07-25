@@ -16,16 +16,21 @@ Realtime order dashboard: database changes propagate to every connected browser 
                             │ REST (fetch with Bearer token)
 ┌───────────────────────────▼────────────────────────────────────┐
 │  Node.js  /  Express  /  Socket.IO server                      │
-│    • REST routes: read/write MongoDB only                      │
-│    • Change stream: sole emitter of order_update events        │
-│    • Resume token: picks up from last position after restart   │
+│    • REST routes: read/write PostgreSQL only                   │
+│    • Kafka consumer: sole emitter of order_update events       │
 │    • Room-scoped emits: io.to(room).emit(…)                    │
 └───────────────────────────┬────────────────────────────────────┘
-                            │ MongoDB driver (change stream)
+                            │ KafkaJS consumer
 ┌───────────────────────────▼────────────────────────────────────┐
-│  MongoDB (replica set rs0)                                     │
-│    • orders collection                                         │
-│    • Change stream: INSERT / UPDATE / DELETE notifications     │
+│  Apache Kafka                                                  │
+│    • Topic: ordermonitor.public.orders                         │
+│    • Produced by Debezium Postgres connector                   │
+└───────────────────────────┬────────────────────────────────────┘
+                            │ Debezium CDC (logical replication)
+┌───────────────────────────▼────────────────────────────────────┐
+│  PostgreSQL (wal_level=logical)                                │
+│    • orders table                                              │
+│    • INSERT / UPDATE / DELETE → Debezium → Kafka → Node.js    │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -35,12 +40,14 @@ Or as a Mermaid diagram:
 flowchart LR
     Browser["Browser\n(Socket.IO client)"]
     Server["Node.js / Express / Socket.IO"]
-    Mongo["MongoDB\n(replica set rs0)"]
+    Kafka["Apache Kafka\n(Debezium topic)"]
+    Postgres["PostgreSQL\n(wal_level=logical)"]
 
     Browser -- "REST (Bearer token)" --> Server
     Server -- "order_update (WebSocket)" --> Browser
-    Mongo -- "Change stream event" --> Server
-    Server -- "read / write" --> Mongo
+    Postgres -- "logical replication" --> Kafka
+    Kafka -- "KafkaJS consumer" --> Server
+    Server -- "read / write" --> Postgres
 ```
 
 ---
@@ -54,8 +61,10 @@ docker compose up
 ```
 
 This starts:
-- A MongoDB replica set (`rs0`) container — change streams work immediately.
-- The Node.js app on port 5000.
+- **PostgreSQL** with `wal_level=logical` for Debezium CDC.
+- **Zookeeper + Kafka** (Confluent 7.6) single-node broker.
+- **Debezium Kafka Connect** with the Postgres connector pre-configured.
+- The **Node.js app** on port 5000.
 
 Then open <http://localhost:5000>.
 
@@ -65,7 +74,13 @@ To seed sample data:
 docker compose exec app node seed.js
 ```
 
-### Option B — Local Node.js + MongoDB
+To register the Debezium connector (if not auto-registered):
+
+```bash
+bash debezium/register.sh
+```
+
+### Option B — Local Node.js + external services
 
 1. **Install dependencies:**
 
@@ -77,38 +92,57 @@ docker compose exec app node seed.js
 
    ```env
    PORT=5000
-   MONGODB_URI=mongodb://127.0.0.1:27017
-   MONGODB_DB=realtime_orders
-   MONGODB_COLLECTION=orders
+   PG_HOST=localhost
+   PG_PORT=5432
+   PG_USER=orderuser
+   PG_PASSWORD=orderpass
+   PG_DATABASE=ordersdb
+   KAFKA_BROKER=localhost:9092
+   KAFKA_TOPIC=ordermonitor.public.orders
    # Leave blank to disable bearer-token auth (development only)
    API_TOKEN=
    ```
 
-3. **Start MongoDB as a replica set** (required for change streams):
+3. **Start PostgreSQL** with logical replication enabled:
 
    ```bash
-   mongod --dbpath C:\data\db --replSet rs0
+   # Example using Docker:
+   docker run -d --name postgres \
+     -e POSTGRES_USER=orderuser \
+     -e POSTGRES_PASSWORD=orderpass \
+     -e POSTGRES_DB=ordersdb \
+     -p 5432:5432 \
+     postgres:16-alpine \
+     postgres -c wal_level=logical -c max_replication_slots=4 -c max_wal_senders=4
    ```
 
-   Then initialise once in `mongosh`:
+4. **Apply the schema:**
 
-   ```javascript
-   rs.initiate()
+   ```bash
+   psql -h localhost -U orderuser -d ordersdb -f db/init.sql
    ```
 
-4. **Seed sample orders:**
+5. **Start Kafka + Debezium** (see `docker-compose.yml` for reference config).
+
+6. **Register the Debezium connector:**
+
+   ```bash
+   bash debezium/register.sh
+   ```
+
+7. **Seed sample orders:**
 
    ```bash
    npm run seed
    ```
 
-5. **Start the server:**
+8. **Start the server:**
 
    ```bash
    npm start
    ```
 
-6. Open <http://localhost:5000>.
+9. Open <http://localhost:5000>.
 
 ---
 
@@ -118,7 +152,7 @@ All routes require a `Bearer` token when `API_TOKEN` is set in `.env`.
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| `GET` | `/orders?limit=50&cursor=<id>` | Paginated order list (cursor = last `_id`) |
+| `GET` | `/orders?limit=50&cursor=<id>` | Paginated order list (cursor = last `id`) |
 | `POST` | `/orders` | Create order |
 | `PATCH` | `/orders/:id` | Update order fields |
 | `DELETE` | `/orders/:id` | Delete order |
@@ -158,58 +192,54 @@ Leave `API_TOKEN` empty (or unset) to disable auth — useful for local developm
 npm test
 ```
 
-Uses the Node.js built-in test runner (`node --test`). Requires MongoDB running as a replica set.
+Uses the Node.js built-in test runner (`node --test`). Requires PostgreSQL running and accessible.
 
 Tests cover:
-- `POST /orders` → `201` + correct document shape.
+- `POST /orders` → `201` + correct document shape (integer `id`, all fields present).
 - `POST /orders` → triggers a Socket.IO `order_update` event with `operation: 'INSERT'`.
 
 ---
 
-## Test database changes (Compass or mongosh)
+## Test database changes (psql or any Postgres client)
 
-```javascript
-use realtime_orders
+```sql
+-- Connect to the database
+\c ordersdb
 
-db.orders.insertOne({
-  customer_name: "Your Name",
-  product_name: "Mouse",
-  status: "pending",
-  created_at: new Date(),
-  updated_at: new Date()
-})
+-- Insert a new order
+INSERT INTO orders (customer_name, product_name, status, created_at, updated_at)
+VALUES ('Your Name', 'Mouse', 'pending', NOW(), NOW());
 
-db.orders.updateOne(
-  { customer_name: "Your Name" },
-  { $set: { status: "delivered", updated_at: new Date() } }
-)
+-- Update an order
+UPDATE orders
+SET status = 'delivered', updated_at = NOW()
+WHERE customer_name = 'Your Name';
 ```
 
-The dashboard at <http://localhost:5000> updates without a page refresh.
+The dashboard at <http://localhost:5000> updates without a page refresh (requires Debezium + Kafka running).
 
 ---
 
 ## Design Decisions & Tradeoffs
 
-### Why change streams over polling?
+### Why Debezium CDC over polling?
 
-Polling introduces a fixed latency equal to the poll interval and burns database I/O even when nothing has changed. Change streams are push-based: the server receives a notification within milliseconds of a write, with zero wasted reads. This also scales well — a single open cursor (change stream) serves any number of Socket.IO clients.
+Polling introduces a fixed latency equal to the poll interval and burns database I/O even when nothing has changed. Debezium uses PostgreSQL logical replication (`wal_level=logical`), which is push-based: changes are streamed from the WAL within milliseconds of a write, with zero wasted reads.
 
-### Why MongoDB change streams over Postgres `LISTEN/NOTIFY`?
+### Why Kafka as the CDC transport?
 
-Both are valid. `LISTEN/NOTIFY` is simple and works on any Postgres installation. MongoDB change streams were chosen here because:
-
-- They are built on the oplog, which means they survive connection blips via **resume tokens** — a feature with no native equivalent in `LISTEN/NOTIFY`.
-- The change event includes a full copy of the updated document (`fullDocument: 'updateLookup'`), eliminating the need for a follow-up `SELECT`.
-- Resume tokens and Postgres logical replication are both viable for production; the design here maps naturally to the MongoDB data model already in use.
+Kafka decouples the database change stream from the application:
+- **Durability**: events are persisted in Kafka and can be replayed.
+- **Offset management**: the Kafka consumer group tracks its position, equivalent to MongoDB's resume tokens — the server picks up exactly where it left off after a restart.
+- **Scalability**: multiple consumer instances can read the same topic; Kafka handles fan-out without extra work from the database.
 
 ### Delivery guarantee
 
 | Layer | Guarantee |
 |-------|-----------|
-| Change stream + resume token | Server replays any events missed during a server restart |
+| Debezium + Kafka offset | Server replays any events missed during a restart |
 | `socket.on('connect')` refetch | Client re-fetches the full order list on every (re)connect, catching events missed while the WebSocket was down |
-| Combined | At-least-once delivery to the browser; duplicates are idempotent (upsert by `_id`) |
+| Combined | At-least-once delivery to the browser; duplicates are idempotent (upsert by `id`) |
 
 ---
 
@@ -236,12 +266,6 @@ const sub = pub.duplicate();
 io.adapter(createAdapter(pub, sub));
 ```
 
-### Single change-stream owner instance
+### Single Kafka consumer owner instance
 
-Only **one** process should own the change stream and emit to Redis (to avoid duplicate events). Elect an owner using:
-
-- A distributed lock in Redis (e.g. `SET lock NX EX 30`).
-- Kubernetes leader election.
-- A dedicated "change-stream worker" deployment separate from the API servers.
-
-All API server instances subscribe to Redis and relay events to their own connected sockets; only the owner process reads from MongoDB.
+Only **one** process should own the Kafka consumer group to avoid duplicate events being emitted to clients. For multi-instance deployments, use a dedicated "change-stream worker" deployment separate from the API servers, or rely on Kafka's native consumer group protocol which assigns partitions exclusively to one consumer per group.
